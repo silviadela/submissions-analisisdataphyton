@@ -1,0 +1,18 @@
+# Core data science
+pandas>=1.4.0
+numpy>=1.23.0
+
+# Visualization
+matplotlib>=3.0.0
+seaborn>=0.11.0
+altair>=4.0.0
+
+# Dashboard
+streamlit>=1.0.0
+
+# System utilities
+glob2>=0.7
+
+# Optional dependencies
+pyarrow>=7.0.0  # for faster data reading in streamlit
+watchdog>=2.1.5  # for better streamlit file watching
