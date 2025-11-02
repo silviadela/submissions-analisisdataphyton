@@ -1,8 +1,0 @@
-streamlit==1.38.0
-pandas==2.2.2
-numpy==1.26.4
-matplotlib==3.9.2
-seaborn==0.13.2
-glob2==0.7
-pyarrow==21.0.0
-watchdog==4.0.2
