@@ -99,8 +99,23 @@ st.sidebar.header("🔎 Filter Data")
 stations = df["station"].unique().tolist() if "station" in df.columns else []
 selected_station = st.sidebar.selectbox("Pilih stasiun (optional):", ["Semua"] + stations)
 
-min_date = df["datetime"].min()
-max_date = df["datetime"].max()
+# --- amankan datetime jadi date biasa ---
+# buang NaT dulu biar nggak error
+valid_datetime = df["datetime"].dropna()
+
+if not valid_datetime.empty:
+    min_date_ts = valid_datetime.min()
+    max_date_ts = valid_datetime.max()
+
+    # konversi ke tipe date (ini yang Streamlit mau)
+    min_date = min_date_ts.date()
+    max_date = max_date_ts.date()
+else:
+    # fallback kalau datanya aneh
+    import datetime as dt
+    min_date = dt.date(2013, 1, 1)
+    max_date = dt.date(2017, 2, 28)
+
 date_range = st.sidebar.date_input(
     "Rentang waktu:",
     value=(min_date, max_date),
@@ -112,16 +127,16 @@ fdf = df.copy()
 if selected_station != "Semua" and "station" in df.columns:
     fdf = fdf[fdf["station"] == selected_station]
 
-if isinstance(date_range, tuple) and len(date_range) == 2:
+# date_input ngasih tuple (start, end)
+if isinstance(date_range, (list, tuple)) and len(date_range) == 2:
     start_date, end_date = date_range
+    # ubah ke datetime biar bisa dibandingkan
+    start_dt = pd.to_datetime(start_date)
+    end_dt = pd.to_datetime(end_date)
     fdf = fdf[
-        (fdf["datetime"] >= pd.to_datetime(start_date))
-        & (fdf["datetime"] <= pd.to_datetime(end_date))
+        (fdf["datetime"] >= start_dt)
+        & (fdf["datetime"] <= end_dt)
     ]
-
-if fdf.empty:
-    st.warning("⚠️ Data kosong setelah difilter.")
-    st.stop()
 
 # =========================================================
 # 3. TABS
