@@ -1,372 +1,370 @@
-# dashboard.py
-# ============================================================
-# DASHBOARD STREAMLIT – PROYEK AKHIR ANALISIS DATA (STEAMITE)
-# Khusus dataset PRSA_* (Beijing PM2.5) seperti di screenshot kamu
-# - Header ada tanda kutip: "year","month","day","hour","PM2.5",...
-# - Akan digabung otomatis kalau ada banyak file PRSA_Data_*.csv
-# - Kalau sudah ada main_data.csv dan isinya > 0, langsung pakai itu
-# ============================================================
-
-import os
-import pandas as pd
-import numpy as np
 import streamlit as st
-import altair as alt
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+import os
+import glob
+import warnings
 
-# Set the path to the PRSA data directory
-prsa_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'PRSA_Data_20130301-20170228')
+# Konfigurasi untuk menghilangkan warning
+warnings.filterwarnings('ignore')
 
-# Get all PRSA CSV files
-files = [f for f in os.listdir(prsa_dir) if f.startswith("PRSA_Data_") and f.endswith(".csv")]
-
-if not files:
-    print("No PRSA data files found!")
-    exit(1)
-
-# Read and combine all files
-dfs = []
-for f in files:
-    file_path = os.path.join(prsa_dir, f)
-    print(f"Reading {f}...")
-    tmp = pd.read_csv(file_path)
-    tmp["source_file"] = f
-    dfs.append(tmp)
-
-# Combine all dataframes
-df = pd.concat(dfs, ignore_index=True)
-
-# Clean column names
-cleaned_cols = []
-for c in df.columns:
-    c = c.strip().replace('"', "")     # remove quotes
-    c = c.replace(" ", "_")            # space to underscore
-    c = c.replace(".", "_") 
-    c = c.lower()                      # to lowercase
-    cleaned_cols.append(c)
-df.columns = cleaned_cols
-
-# Convert time columns to numeric
-time_cols = ["year", "month", "day", "hour"]
-for col in time_cols:
-    df[col] = pd.to_numeric(df[col], errors="coerce")
-
-# Create timestamp column
-df["timestamp"] = pd.to_datetime(
-    df[["year", "month", "day", "hour"]],
-    errors="coerce"
-)
-
-# Set location from station
-if "station" in df.columns:
-    df["location"] = df["station"]
-else:
-    df["location"] = "PRSA-Station"
-
-# Save to main_data.csv
-output_path = os.path.join(os.path.dirname(__file__), "main_data.csv")
-print(f"Saving to {output_path}...")
-df.to_csv(output_path, index=False)
-print("Done!")
-
-# ------------------------------------------------------------
-# CONFIG
-# ------------------------------------------------------------
+# Konfigurasi halaman
 st.set_page_config(
-    page_title="Dashboard Analisis Data",
-    layout="wide"
+    page_title="Dashboard Analisis Kualitas Udara Beijing",
+    layout="wide",
+    menu_items={
+        'Get Help': None,
+        'Report a bug': None,
+        'About': None
+    }
 )
 
-st.markdown(
-    """
-    <style>
-    .block-container {padding-top: 1.3rem; padding-bottom: 1rem;}
-    .stMetric {border-radius: 16px; padding: 10px; background: rgba(127,127,127,0.05);}
-    .fineprint {font-size:12px; color:#64748B}
-    .caption-strong {font-size:13px; font-weight:600; color:#0f172a}
-    </style>
-    """,
-    unsafe_allow_html=True
-)
+st.title("Dashboard Analisis Data - Kualitas Udara Beijing")
 
-# ------------------------------------------------------------
-# 1. FUNGSI BACA & GABUNG DATA PRSA
-# ------------------------------------------------------------
-def read_prsa_folder(base_dir: str, main_file: str = "main_data.csv") -> pd.DataFrame:
-    """
-    1. Kalau sudah ada main_data.csv dan ukurannya > 0 → langsung baca itu.
-    2. Kalau belum ada / kosong → gabungkan semua PRSA_Data_*.csv di folder itu.
-    3. Bersihkan nama kolom: hapus tanda kutip, lowercase, ganti spasi ke underscore.
-    4. Paksa kolom year, month, day, hour → numeric.
-    5. Bangun kolom timestamp dari year,month,day,hour.
-    6. Pakai kolom station → location.
-    """
-    main_path = os.path.join(base_dir, main_file)
+# =========================================================
+# 0. LOAD DATA
+# =========================================================
+@st.cache_data(show_spinner=False)
+def load_data():
+    try:
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        main_data_path = os.path.join(script_dir, "main_data.csv")
+        
+        if os.path.exists(main_data_path):
+            df = pd.read_csv(main_data_path)
+        else:
+            # Kalau belum ada, buat dari data PRSA
+            data_dir = os.path.join(os.path.dirname(script_dir), "PRSA_Data_20130301-20170228")
+            csv_files = glob.glob(os.path.join(data_dir, "*.csv"))
+            
+            if not csv_files:
+                st.error("❌ Tidak ada file CSV di folder PRSA_Data_20130301-20170228")
+                st.stop()
+                
+            # Baca dan gabungkan semua file CSV
+            dfs = []
+            for file in csv_files:
+                filename = os.path.basename(file)
+                station = filename.replace("PRSA_Data_", "").split("_")[0]
+                df = pd.read_csv(file)
+                df['station'] = station
+                dfs.append(df)
+            
+            # Gabungkan semua data dan simpan
+            df = pd.concat(dfs, ignore_index=True)
+            df.to_csv(main_data_path, index=False)
+        
+        # Bikin kolom datetime
+        if {"year", "month", "day", "hour"}.issubset(df.columns):
+            df["datetime"] = pd.to_datetime(df[["year", "month", "day", "hour"]])
+        elif {"year", "month", "day"}.issubset(df.columns):
+            df["datetime"] = pd.to_datetime(df[["year", "month", "day"]])
+        else:
+            df["datetime"] = pd.to_datetime(df.iloc[:, 0], errors="coerce")
+            
+        return df
+    except Exception as e:
+        st.error(f"❌ Error saat memuat data: {str(e)}")
+        st.stop()
 
-    # ---- 1) kalau sudah ada main_data.csv ----
-    if os.path.exists(main_path) and os.path.getsize(main_path) > 0:
-        df = pd.read_csv(main_path)
-    else:
-        # ---- 2) gabungkan semua PRSA_Data_*.csv ----
-        files = [
-            f for f in os.listdir(base_dir)
-            if f.startswith("PRSA_Data_") and f.endswith(".csv")
-        ]
-        if not files:
-            # tidak ada PRSA sama sekali
-            return pd.DataFrame()
 
-        dfs = []
-        for f in files:
-            p = os.path.join(base_dir, f)
-            # dataset kamu pakai koma, jadi pd.read_csv biasa cukup
-            tmp = pd.read_csv(p)
-            tmp["source_file"] = f
-            dfs.append(tmp)
-
-        df = pd.concat(dfs, ignore_index=True)
-        # simpan supaya besok-besok nggak gabung ulang
-        df.to_csv(main_path, index=False)
-
-    # ---- 3) bersihkan nama kolom ----
-    # awalnya: "No","year","month","day","hour","PM2.5",...
-    cleaned_cols = []
-    for c in df.columns:
-        c = c.strip().replace('"', "")     # buang "
-        c = c.replace(" ", "_")            # spasi → underscore
-        c = c.replace(".", "_") 
-        c = c.lower()                      # ke huruf kecil
-        cleaned_cols.append(c)
-    df.columns = cleaned_cols
-
-    # ---- 4) paksa kolom waktu ke numeric ----
-    time_cols = ["year", "month", "day", "hour"]
-    if all(col in df.columns for col in time_cols):
-        for col in time_cols:
-            # contoh: "2013" → 2013
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-        # ---- 5) buat kolom timestamp ----
-        df["timestamp"] = pd.to_datetime(
-            df[["year", "month", "day", "hour"]],
-            errors="coerce"
-        )
-    else:
-        # kalau kolom tahun/bulan/hari/jam nggak lengkap
-        df["timestamp"] = pd.NaT
-
-    # ---- 6) lokasi ----
-    if "station" in df.columns:
-        df["location"] = df["station"]
-    else:
-        df["location"] = "PRSA-Station"
-
-    return df
-
-# ------------------------------------------------------------
-# 2. FUNGSI LAIN
-# ------------------------------------------------------------
-def iqr_anomaly_mask(s: pd.Series, k: float = 1.5) -> pd.Series:
-    q1, q3 = s.quantile(0.25), s.quantile(0.75)
-    iqr = q3 - q1
-    lower, upper = q1 - k * iqr, q3 + k * iqr
-    return (s < lower) | (s > upper)
-
-def download_csv_button(df: pd.DataFrame, filename: str, label: str = "📥 Unduh CSV"):
-    csv = df.to_csv(index=False).encode("utf-8")
-    st.download_button(label=label, data=csv, file_name=filename, mime="text/csv")
-
-# ------------------------------------------------------------
-# 3. LOAD DATA (dari folder kamu)
-# ------------------------------------------------------------
-# Lokasi folder PRSA ada di parent folder dari Dashboard
-# (sama dengan struktur proyek: ../PRSA_Data_20130301-20170228)
-PRSA_DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'PRSA_Data_20130301-20170228')
-
-# Folder ini juga dipakai untuk menyimpan/menaruh `main_data.csv`
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
-# user boleh upload csv lain juga
-uploaded = st.sidebar.file_uploader("Unggah CSV (opsional)", type=["csv"])
-
-if uploaded is not None:
-    # kalau user upload, kita pakai itu, tapi tetap normalkan kolomnya
-    df = pd.read_csv(uploaded)
-    df.columns = [c.strip().replace('"', "").replace(" ", "_").lower() for c in df.columns]
-    # kalau user upload juga punya year,month,day,hour → bikin timestamp
-    if all(col in df.columns for col in ["year", "month", "day", "hour"]):
-        for col in ["year", "month", "day", "hour"]:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-        df["timestamp"] = pd.to_datetime(df[["year", "month", "day", "hour"]], errors="coerce")
-    elif "timestamp" not in df.columns:
-        df["timestamp"] = pd.NaT
-    if "station" in df.columns and "location" not in df.columns:
-        df["location"] = df["station"]
-else:
-    # kalau tidak upload → baca PRSA dari folder PRSA_DATA_DIR (parent folder)
-    # Fungsi read_prsa_folder akan membaca main_data.csv jika ada, atau
-    # menggabungkan file PRSA_Data_*.csv di folder tersebut.
-    df = read_prsa_folder(PRSA_DATA_DIR, "main_data.csv")
-
-# ------------------------------------------------------------
-# 4. VALIDASI DATA
-# ------------------------------------------------------------
-if df.empty:
-    st.error("❗ Tidak ada data yang bisa dibaca. Pastikan ada `PRSA_Data_*.csv` atau `main_data.csv` di folder ini.")
+df = load_data()
+if df is None:
+    st.error("❌ Tidak menemukan `main_data.csv`. Jalankan script penggabung datamu dulu.")
     st.stop()
 
-if "timestamp" not in df.columns:
-    st.error("❗ Kolom waktu (`timestamp` atau `year,month,day,hour`) tidak ditemukan / gagal dibentuk.")
-    st.write("Kolom yang terbaca:", list(df.columns))
-    st.stop()
+# daftar kolom
+pollutant_cols = [c for c in ["PM2.5", "PM10", "SO2", "NO2", "CO", "O3"] if c in df.columns]
 
-# ubah ke datetime dan buang yang gagal
-df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
-df = df.dropna(subset=["timestamp"])
-
-# pastikan ada location
-if "location" not in df.columns:
-    df["location"] = "PRSA-Station"
-
-# deteksi kolom numerik
-num_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-# hilangkan kolom index/waktu yang nggak perlu
-for dropcol in ["no", "year", "month", "day", "hour"]:
-    if dropcol in num_cols:
-        num_cols.remove(dropcol)
-
-if not num_cols:
-    st.error("❗ Tidak ada kolom numerik yang bisa diplot (misal: pm2.5, pm10, temp, pres).")
-    st.write("Kolom yang ada:", list(df.columns))
-    st.stop()
-
-# ------------------------------------------------------------
-# 5. SIDEBAR FILTER
-# ------------------------------------------------------------
-st.sidebar.header("Filter Dashboard")
-
-metric = st.sidebar.selectbox("Metrik utama", num_cols, index=0)
-
-min_d, max_d = df["timestamp"].min().date(), df["timestamp"].max().date()
-start_d, end_d = st.sidebar.date_input(
-    "Rentang tanggal",
-    value=(min_d, max_d),
-    min_value=min_d,
-    max_value=max_d
-)
-
-locations = sorted(df["location"].dropna().astype(str).unique().tolist())
-sel_locs = st.sidebar.multiselect("Lokasi", locations, default=locations)
-
-min_v, max_v = float(df[metric].min()), float(df[metric].max())
-v_min, v_max = st.sidebar.slider(
-    "Rentang nilai",
-    min_value=min_v,
-    max_value=max_v,
-    value=(min_v, max_v)
-)
-
-with st.sidebar.expander("Deteksi Anomali (IQR)"):
-    do_anom = st.checkbox("Tandai anomali", value=False)
-    iqr_k = st.slider("Sensitivitas", 0.5, 3.0, 1.5, 0.1)
-
-st.sidebar.markdown("---")
-
-# ------------------------------------------------------------
-# 6. FILTER DATAFRAME
-# ------------------------------------------------------------
-mask = (
-    (df["timestamp"].dt.date >= start_d) &
-    (df["timestamp"].dt.date <= end_d) &
-    (df["location"].astype(str).isin(sel_locs)) &
-    (df[metric].between(v_min, v_max))
-)
-
-fdf = df.loc[mask].copy()
-
-# ------------------------------------------------------------
-# 7. HEADER & KPI
-# ------------------------------------------------------------
-st.title("Dashboard Analisis Data (PRSA)")
-st.caption("Dataset kualitas udara PRSA (multi-station) yang dibersihkan otomatis dari folder lokal.")
-
-k1, k2, k3, k4 = st.columns(4)
-with k1:
-    st.metric("Jumlah Record", f"{len(fdf):,}")
-with k2:
-    st.metric("Lokasi Aktif", f"{fdf['location'].nunique():,}")
-with k3:
-    st.metric(f"Mean {metric}", f"{fdf[metric].mean():.2f}")
-with k4:
-    st.metric(f"Standard Deviation {metric}", f"{fdf[metric].std():.2f}")
-
-st.markdown("<div class='fineprint'>*Ganti metrik dari sidebar untuk analisis berbeda*</div>", unsafe_allow_html=True)
-
-# ------------------------------------------------------------
-# 8. GRAFIK – TREN WAKTU & PER LOKASI
-# ------------------------------------------------------------
-col1, col2 = st.columns((2, 1))
+# =========================================================
+# 1. METRICS HEADER
+# =========================================================
+col1, col2 = st.columns(2)
 
 with col1:
-    st.subheader("Tren Harian")
-    ts = fdf.groupby(pd.Grouper(key="timestamp", freq="D"))[metric].mean().reset_index()
-    chart_ts = alt.Chart(ts).mark_line(point=True).encode(
-        x=alt.X("timestamp:T", title="Tanggal"),
-        y=alt.Y(metric, title=f"Rata-rata {metric}"),
-        tooltip=["timestamp:T", alt.Tooltip(metric, format=".2f")]
-    ).interactive()
-    st.altair_chart(chart_ts, width='stretch')
-
+    st.metric("Jumlah Record", f"{len(df):,}")
 with col2:
-    st.subheader("Rerata per Lokasi")
-    by_loc = fdf.groupby("location", as_index=False)[metric].mean().sort_values(metric, ascending=False)
-    chart_loc = alt.Chart(by_loc).mark_bar().encode(
-        x=alt.X(metric, title=f"Rata-rata {metric}"),
-        y=alt.Y("location", sort='-x', title="Lokasi"),
-        tooltip=["location", alt.Tooltip(metric, format=".2f")]
-    )
-    st.altair_chart(chart_loc, width='stretch')
+    if "station" in df.columns:
+        st.metric("Lokasi Aktif", df["station"].nunique())
+    else:
+        st.metric("Lokasi Aktif", "-")
 
-# ------------------------------------------------------------
-# 9. BOXPLOT PER LOKASI
-# ------------------------------------------------------------
-st.subheader("Sebaran Nilai per Lokasi")
-box = alt.Chart(fdf).mark_boxplot(extent="min-max").encode(
-    x=alt.X("location:N", title="Lokasi"),
-    y=alt.Y(metric, title=metric)
+st.caption("*Ganti filter di kiri supaya metrik dan grafik ikut menyesuaikan*")
+
+# =========================================================
+# 2. SIDEBAR FILTER
+# =========================================================
+st.sidebar.header("🔎 Filter Data")
+
+stations = df["station"].unique().tolist() if "station" in df.columns else []
+selected_station = st.sidebar.selectbox("Pilih stasiun (optional):", ["Semua"] + stations)
+
+min_date = df["datetime"].min()
+max_date = df["datetime"].max()
+date_range = st.sidebar.date_input(
+    "Rentang waktu:",
+    value=(min_date, max_date),
+    min_value=min_date,
+    max_value=max_date
 )
-st.altair_chart(box, width='stretch')
 
-# ------------------------------------------------------------
-# 10. DETEKSI ANOMALI
-# ------------------------------------------------------------
-st.subheader("Deteksi Anomali (IQR)")
-if do_anom:
-    fdf["is_anom"] = iqr_anomaly_mask(fdf[metric], k=iqr_k)
-    anom_df = fdf[fdf["is_anom"]].copy()
-    st.write(f"Ditemukan **{len(anom_df)}** titik anomali pada metrik **{metric}**.")
+# terapkan filter
+fdf = df.copy()
+if selected_station != "Semua" and "station" in df.columns:
+    fdf = fdf[fdf["station"] == selected_station]
 
-    sc = alt.Chart(fdf).mark_circle(size=40, opacity=0.7).encode(
-        x=alt.X("timestamp:T", title="Waktu"),
-        y=alt.Y(metric, title=metric),
-        color=alt.condition(
-            alt.datum.is_anom == True,
-            alt.value("crimson"),
-            alt.value("steelblue")
-        ),
-        tooltip=["timestamp:T", "location", alt.Tooltip(metric, format=".2f")]
-    ).interactive()
-    st.altair_chart(sc, width='stretch')
+if isinstance(date_range, tuple) and len(date_range) == 2:
+    start_date, end_date = date_range
+    fdf = fdf[
+        (fdf["datetime"] >= pd.to_datetime(start_date)) &
+        (fdf["datetime"] <= pd.to_datetime(end_date))
+    ]
 
-    with st.expander("Lihat tabel anomali"):
-        st.dataframe(anom_df[["timestamp", "location", metric]].sort_values("timestamp"))
-else:
-    st.caption("Aktifkan di sidebar untuk melihat titik outlier.")
+if fdf.empty:
+    st.warning("Data kosong setelah difilter.")
+    st.stop()
 
-# ------------------------------------------------------------
-# 11. DATA TABLE & DOWNLOAD
-# ------------------------------------------------------------
-st.subheader("Data (Hasil Filter)")
-st.dataframe(fdf.sort_values("timestamp", ascending=False).reset_index(drop=True))
+# =========================================================
+# 3. TABS (tanpa korelasi)
+# =========================================================
+tab1, tab2, tab3 = st.tabs([
+    "📈 Tren Polutan",
+    "🍂 Polutan per Musim",
+    "🏙️ Kategori per Stasiun (Baik / Sedang / Buruk)",
+])
 
-download_csv_button(fdf, "filtered_data.csv")
+# =========================================================
+# TAB 1 - TREN POLUTAN
+# =========================================================
+with tab1:
+    st.subheader("Tren Perubahan Polutan Udara (Rata-rata Bulanan)")
 
-st.markdown("---")
+    # resample bulanan
+    month_df = (
+        fdf.set_index("datetime")[pollutant_cols]
+        .resample("M")
+        .mean()
+        .reset_index()
+    )
+
+    pilih_polutan = st.multiselect(
+        "Pilih polutan yang ingin ditampilkan:",
+        options=pollutant_cols,
+        default=pollutant_cols[:4],
+        key="multiselect_tab1"
+    )
+
+    fig, ax = plt.subplots(figsize=(12, 4))
+    for col in pilih_polutan:
+        ax.plot(month_df["datetime"], month_df[col], label=col)
+    ax.set_title("Tren Perubahan Polutan Udara (Rata-rata Bulanan)")
+    ax.set_xlabel("Waktu (tahun)")
+    ax.set_ylabel("Konsentrasi (µg/m³)")
+    ax.grid(True)
+    ax.legend()
+    st.pyplot(fig)
+
+# =========================================================
+# TAB 2 - POLUTAN PER MUSIM (INTERAKTIF)
+# =========================================================
+with tab2:
+    st.subheader("Rata-rata Konsentrasi Polutan per Musim")
+
+    # buat kolom musim
+    fdf["month_num"] = fdf["datetime"].dt.month
+
+    def to_season(m):
+        if m in [12, 1, 2]:
+            return "Winter"
+        elif m in [3, 4, 5]:
+            return "Spring"
+        elif m in [6, 7, 8]:
+            return "Summer"
+        else:
+            return "Autumn"
+
+    fdf["season"] = fdf["month_num"].apply(to_season)
+    season_order = ["Winter", "Spring", "Summer", "Autumn"]
+
+    # pilih musim
+    musim = st.selectbox("Pilih musim:", options=season_order, index=0)
+
+    # pilih polutan yang akan ditampilkan
+    polutan_pilihan = st.multiselect(
+        "Pilih polutan yang ingin ditampilkan:",
+        options=["PM2.5", "PM10", "SO2", "NO2", "CO", "O3"],
+        default=["PM2.5", "PM10", "SO2", "NO2", "CO", "O3"],
+        key="multiselect_tab2"
+    )
+
+    # keterangan bulan per musim
+    musim_ke_bulan = {
+        "Winter": "Desember - Januari - Februari",
+        "Spring": "Maret - April - Mei",
+        "Summer": "Juni - Juli - Agustus",
+        "Autumn": "September - Oktober - November",
+    }
+    st.info(f"📅 Musim **{musim}** mencakup bulan: **{musim_ke_bulan[musim]}**")
+
+    # hitung rata-rata per musim
+    season_mean = (
+        fdf.groupby("season")[["PM2.5", "PM10", "SO2", "NO2", "CO", "O3"]]
+        .mean()
+        .reindex(season_order)
+    )
+
+    if musim not in season_mean.index or season_mean.loc[musim].isna().all():
+        st.warning("⚠️ Data untuk musim ini kosong setelah filter.")
+    else:
+        selected_row = season_mean.loc[musim].dropna()
+        selected_row = selected_row[selected_row.index.isin(polutan_pilihan)]
+
+        fig, ax = plt.subplots(figsize=(8, 4))
+        bars = selected_row.plot(
+            kind="bar",
+            ax=ax,
+            color=["#9ecae1", "#6baed6", "#3182bd", "#08519c"][:len(selected_row)]
+        )
+        ax.set_title(f"Konsentrasi Rata-rata Polutan pada Musim {musim}")
+        ax.set_ylabel("Konsentrasi (µg/m³)")
+        ax.set_xlabel("Jenis Polutan")
+
+        # buat agar teks tidak nabrak
+        max_val = selected_row.max()
+        ax.set_ylim(0, max_val * 1.2)
+
+        # tampilkan nilai di atas batang
+        for i, v in enumerate(selected_row.values):
+            if v > 0:
+                ax.text(
+                    i,
+                    v + (max_val * 0.03),
+                    f"{v:.2f}",
+                    ha="center",
+                    va="bottom",
+                    fontsize=10,
+                    fontweight="bold"
+                )
+
+        st.pyplot(fig)
+
+    st.markdown(
+        """
+        **Interpretasi cepat:**
+        - ❄️ *Winter* cenderung memiliki polutan tertinggi (efek pemanas & udara dingin).
+        - 🌞 *Summer* biasanya paling rendah karena sirkulasi udara lebih baik.
+        """
+    )
+# =========================================================
+# TAB 3 - KATEGORI PER STASIUN (BAIK / SEDANG / BURUK)
+# =========================================================
+with tab3:
+    st.subheader("🏙️ Kategori Polutan per Stasiun")
+
+    if "station" not in fdf.columns:
+        st.warning("Dataset tidak memiliki kolom `station`.")
+    else:
+        # ambil rata-rata per stasiun dari data yang sudah difilter
+        by_station = (
+            fdf.groupby("station")[["PM2.5", "PM10", "SO2", "NO2", "CO", "O3"]]
+            .mean()
+            .reset_index()
+        )
+
+        # pilih stasiun
+        stasiun_pilihan = st.selectbox(
+            "Pilih stasiun untuk dilihat detail kategorinya:",
+            options=by_station["station"].tolist()
+        )
+
+        # pilih polutan yang ingin ditampilkan
+        polutan_tab3 = st.multiselect(
+            "Pilih polutan yang ingin ditampilkan:",
+            options=["PM2.5", "PM10", "SO2", "NO2", "CO", "O3"],
+            default=["PM2.5", "PM10", "SO2", "NO2", "CO", "O3"],
+            key="multiselect_tab3"
+        )
+
+        row = by_station[by_station["station"] == stasiun_pilihan].iloc[0]
+
+        # fungsi kategori
+        def cat_pm25(v):
+            if v <= 35: return "Baik"
+            elif v <= 75: return "Sedang"
+            else: return "Buruk"
+
+        def cat_pm10(v):
+            if v <= 50: return "Baik"
+            elif v <= 150: return "Sedang"
+            else: return "Buruk"
+
+        def cat_co(v):
+            if v <= 1000: return "Baik"
+            elif v <= 1500: return "Sedang"
+            else: return "Buruk"
+
+        def cat_no2(v):
+            if v <= 40: return "Baik"
+            elif v <= 80: return "Sedang"
+            else: return "Buruk"
+            
+        def cat_so2(v):
+            if v <= 40: return "Baik"
+            elif v <= 80: return "Sedang"
+            else: return "Buruk"
+            
+        def cat_o3(v):
+            if v <= 100: return "Baik"
+            elif v <= 150: return "Sedang"
+            else: return "Buruk"
+
+        cat_dict = {}
+        if "PM2.5" in row: cat_dict["PM2.5"] = (row["PM2.5"], cat_pm25(row["PM2.5"]))
+        if "PM10" in row: cat_dict["PM10"] = (row["PM10"], cat_pm10(row["PM10"]))
+        if "CO" in row: cat_dict["CO"] = (row["CO"], cat_co(row["CO"]))
+        if "NO2" in row: cat_dict["NO2"] = (row["NO2"], cat_no2(row["NO2"]))
+        if "SO2" in row: cat_dict["SO2"] = (row["SO2"], cat_so2(row["SO2"]))
+        if "O3" in row: cat_dict["O3"] = (row["O3"], cat_o3(row["O3"]))
+
+        # tampilkan metric hanya untuk polutan yang dipilih
+        cols = st.columns(len(polutan_tab3))
+        idx = 0
+        for pol, (val, cat) in cat_dict.items():
+            if pol not in polutan_tab3:
+                continue
+            with cols[idx]:
+                st.metric(f"{pol} ({cat})", f"{val:.2f}")
+            idx += 1
+
+        st.markdown("📋 **Keterangan kategori:**")
+        st.markdown(
+            """
+            -  **Baik** → masih di bawah ambang aman.  
+            -  **Sedang** → perlu pemantauan (aktivitas harian bisa berpengaruh).  
+            -  **Buruk** → butuh perhatian (biasanya musim dingin/lalu lintas padat).
+            """
+        )
+
+        # grafik horizontal bandingan antar stasiun
+        fig, axes = plt.subplots(3, 2, figsize=(12, 9))
+        fig.suptitle("Rata-rata Polutan per Stasiun")
+
+        def barh_if_selected(ax, col, title):
+            if col in by_station.columns and col in polutan_tab3:
+                ax.barh(by_station["station"], by_station[col], color="#6baed6")
+                ax.set_title(title)
+                ax.set_xlabel("Konsentrasi rata-rata (µg/m³)")
+                ax.set_ylabel("Stasiun")
+            else:
+                ax.axis("off")
+
+        barh_if_selected(axes[0, 0], "PM2.5", "PM2.5 per Stasiun")
+        barh_if_selected(axes[0, 1], "PM10", "PM10 per Stasiun")
+        barh_if_selected(axes[1, 0], "SO2", "SO₂ per Stasiun")
+        barh_if_selected(axes[1, 1], "NO2", "NO₂ per Stasiun")
+        barh_if_selected(axes[2, 0], "CO", "CO per Stasiun")
+        barh_if_selected(axes[2, 1], "O3", "O₃ per Stasiun")
+
+        plt.tight_layout()
+        st.pyplot(fig)
