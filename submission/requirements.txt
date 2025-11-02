@@ -1,12 +1,7 @@
-# Core dependencies
-streamlit>=1.33,<2.0
-pandas>=2.0,<3.0
-numpy>=1.23
-
-# Visualization
-matplotlib>=3.7,<3.10
-seaborn>=0.12
-
-# Optional (boleh dihapus kalau mau ringan)
-pyarrow>=7.0.0
-watchdog>=2.1.5
+streamlit==1.38.0
+pandas==2.2.2
+numpy==1.26.4
+matplotlib==3.9.2
+seaborn==0.13.2
+glob2==0.7
+watchdog==4.0.2

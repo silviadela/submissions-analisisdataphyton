@@ -1,0 +1,28 @@
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environments
+.env/
+.venv/
+env/
+venv/
+.conda/
+
+# Streamlit cache
+.streamlit/
+.streamlit_cache/
+
+# Data files (optional)
+*.csv
+*.xlsx
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# Jupyter / VSCode temp
+.ipynb_checkpoints/
+.vscode/

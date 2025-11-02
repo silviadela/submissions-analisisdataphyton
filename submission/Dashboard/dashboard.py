@@ -3,21 +3,8 @@ import pandas as pd
 import os
 import glob
 import warnings
-
-# ==== coba import matplotlib & seaborn ====
-try:
-    import matplotlib
-    matplotlib.use("Agg")  # untuk environment headless (streamlit cloud)
-    import matplotlib.pyplot as plt
-    import seaborn as sns
-except ModuleNotFoundError:
-    st.error(
-        "ModuleNotFoundError: modul 'matplotlib' / 'seaborn' belum terpasang.\n"
-        "Tambahkan ke requirements.txt: streamlit, pandas, matplotlib, seaborn"
-    )
-    st.stop()
-
-warnings.filterwarnings("ignore")
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 # ==== CONFIG PAGE ====
 st.set_page_config(
