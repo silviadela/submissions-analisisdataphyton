@@ -1,96 +1,108 @@
 import streamlit as st
 import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
 import os
 import glob
 import warnings
 
-# Konfigurasi untuk menghilangkan warning
-warnings.filterwarnings('ignore')
+# ==== coba import matplotlib & seaborn ====
+try:
+    import matplotlib
+    matplotlib.use("Agg")  # untuk environment headless (streamlit cloud)
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+except ModuleNotFoundError:
+    st.error(
+        "ModuleNotFoundError: modul 'matplotlib' / 'seaborn' belum terpasang.\n"
+        "Tambahkan ke requirements.txt: streamlit, pandas, matplotlib, seaborn"
+    )
+    st.stop()
 
-# Konfigurasi halaman
+warnings.filterwarnings("ignore")
+
+# ==== CONFIG PAGE ====
 st.set_page_config(
     page_title="Dashboard Analisis Kualitas Udara Beijing",
     layout="wide",
-    menu_items={
-        'Get Help': None,
-        'Report a bug': None,
-        'About': None
-    }
+    menu_items={"Get Help": None, "Report a bug": None, "About": None},
 )
 
 st.title("Dashboard Analisis Data - Kualitas Udara Beijing")
 
+
 # =========================================================
-# 0. LOAD DATA
+# 0. LOAD DATA  (lebih tangguh: cek 2 lokasi)
 # =========================================================
 @st.cache_data(show_spinner=False)
 def load_data():
     try:
         script_dir = os.path.dirname(os.path.abspath(__file__))
+
+        # 1) cek di folder yang sama dengan dashboard.py
         main_data_path = os.path.join(script_dir, "main_data.csv")
-        
+
+        # 2) kalau nggak ada, cek folder di atasnya (root repo)
+        if not os.path.exists(main_data_path):
+            parent_dir = os.path.dirname(script_dir)
+            alt_path = os.path.join(parent_dir, "main_data.csv")
+            if os.path.exists(alt_path):
+                main_data_path = alt_path
+
         if os.path.exists(main_data_path):
             df = pd.read_csv(main_data_path)
         else:
-            # Kalau belum ada, buat dari data PRSA
+            # ==== fallback: gabung dari folder PRSA ====
             data_dir = os.path.join(os.path.dirname(script_dir), "PRSA_Data_20130301-20170228")
             csv_files = glob.glob(os.path.join(data_dir, "*.csv"))
-            
+
             if not csv_files:
                 st.error("❌ Tidak ada file CSV di folder PRSA_Data_20130301-20170228")
                 st.stop()
-                
-            # Baca dan gabungkan semua file CSV
+
             dfs = []
             for file in csv_files:
                 filename = os.path.basename(file)
                 station = filename.replace("PRSA_Data_", "").split("_")[0]
-                df = pd.read_csv(file)
-                df['station'] = station
-                dfs.append(df)
-            
-            # Gabungkan semua data dan simpan
+                tmp = pd.read_csv(file)
+                tmp["station"] = station
+                dfs.append(tmp)
+
             df = pd.concat(dfs, ignore_index=True)
+            # simpan di folder yang sama dengan dashboard.py
             df.to_csv(main_data_path, index=False)
-        
-        # Bikin kolom datetime
+
+        # bikin kolom datetime
         if {"year", "month", "day", "hour"}.issubset(df.columns):
             df["datetime"] = pd.to_datetime(df[["year", "month", "day", "hour"]])
         elif {"year", "month", "day"}.issubset(df.columns):
             df["datetime"] = pd.to_datetime(df[["year", "month", "day"]])
         else:
+            # fallback: pakai kolom pertama yg mirip tanggal
             df["datetime"] = pd.to_datetime(df.iloc[:, 0], errors="coerce")
-            
+
         return df
     except Exception as e:
-        st.error(f"❌ Error saat memuat data: {str(e)}")
+        st.error(f"❌ Error saat memuat data: {e}")
         st.stop()
 
 
 df = load_data()
 if df is None:
-    st.error("❌ Tidak menemukan `main_data.csv`. Jalankan script penggabung datamu dulu.")
+    st.error("❌ Tidak menemukan data.")
     st.stop()
 
-# daftar kolom
+# kolom polutan yang benar-benar ada
 pollutant_cols = [c for c in ["PM2.5", "PM10", "SO2", "NO2", "CO", "O3"] if c in df.columns]
 
 # =========================================================
-# 1. METRICS HEADER
+# 1. METRIC
 # =========================================================
 col1, col2 = st.columns(2)
-
 with col1:
     st.metric("Jumlah Record", f"{len(df):,}")
 with col2:
-    if "station" in df.columns:
-        st.metric("Lokasi Aktif", df["station"].nunique())
-    else:
-        st.metric("Lokasi Aktif", "-")
+    st.metric("Lokasi Aktif", df["station"].nunique() if "station" in df.columns else "-")
 
-st.caption("*Ganti filter di kiri supaya metrik dan grafik ikut menyesuaikan*")
+st.caption("*Ganti filter di sidebar supaya metrik dan grafik ikut menyesuaikan*")
 
 # =========================================================
 # 2. SIDEBAR FILTER
@@ -106,10 +118,9 @@ date_range = st.sidebar.date_input(
     "Rentang waktu:",
     value=(min_date, max_date),
     min_value=min_date,
-    max_value=max_date
+    max_value=max_date,
 )
 
-# terapkan filter
 fdf = df.copy()
 if selected_station != "Semua" and "station" in df.columns:
     fdf = fdf[fdf["station"] == selected_station]
@@ -117,30 +128,31 @@ if selected_station != "Semua" and "station" in df.columns:
 if isinstance(date_range, tuple) and len(date_range) == 2:
     start_date, end_date = date_range
     fdf = fdf[
-        (fdf["datetime"] >= pd.to_datetime(start_date)) &
-        (fdf["datetime"] <= pd.to_datetime(end_date))
+        (fdf["datetime"] >= pd.to_datetime(start_date))
+        & (fdf["datetime"] <= pd.to_datetime(end_date))
     ]
 
 if fdf.empty:
-    st.warning("Data kosong setelah difilter.")
+    st.warning("⚠️ Data kosong setelah difilter.")
     st.stop()
 
 # =========================================================
-# 3. TABS (tanpa korelasi)
+# 3. TABS
 # =========================================================
-tab1, tab2, tab3 = st.tabs([
-    "📈 Tren Polutan",
-    "🍂 Polutan per Musim",
-    "🏙️ Kategori per Stasiun (Baik / Sedang / Buruk)",
-])
+tab1, tab2, tab3 = st.tabs(
+    [
+        "📈 Tren Polutan",
+        "🍂 Polutan per Musim",
+        "🏙️ Kategori per Stasiun (Baik / Sedang / Buruk)",
+    ]
+)
 
 # =========================================================
-# TAB 1 - TREN POLUTAN
+# TAB 1
 # =========================================================
 with tab1:
     st.subheader("Tren Perubahan Polutan Udara (Rata-rata Bulanan)")
 
-    # resample bulanan
     month_df = (
         fdf.set_index("datetime")[pollutant_cols]
         .resample("M")
@@ -152,7 +164,7 @@ with tab1:
         "Pilih polutan yang ingin ditampilkan:",
         options=pollutant_cols,
         default=pollutant_cols[:4],
-        key="multiselect_tab1"
+        key="multiselect_tab1",
     )
 
     fig, ax = plt.subplots(figsize=(12, 4))
@@ -166,12 +178,11 @@ with tab1:
     st.pyplot(fig)
 
 # =========================================================
-# TAB 2 - POLUTAN PER MUSIM (INTERAKTIF)
+# TAB 2
 # =========================================================
 with tab2:
-    st.subheader("Rata-rata Konsentrasi Polutan per Musim")
+    st.subheader("🍂 Rata-rata Konsentrasi Polutan per Musim")
 
-    # buat kolom musim
     fdf["month_num"] = fdf["datetime"].dt.month
 
     def to_season(m):
@@ -187,29 +198,25 @@ with tab2:
     fdf["season"] = fdf["month_num"].apply(to_season)
     season_order = ["Winter", "Spring", "Summer", "Autumn"]
 
-    # pilih musim
     musim = st.selectbox("Pilih musim:", options=season_order, index=0)
 
-    # pilih polutan yang akan ditampilkan
     polutan_pilihan = st.multiselect(
         "Pilih polutan yang ingin ditampilkan:",
-        options=["PM2.5", "PM10", "SO2", "NO2", "CO", "O3"],
-        default=["PM2.5", "PM10", "SO2", "NO2", "CO", "O3"],
-        key="multiselect_tab2"
+        options=pollutant_cols,
+        default=pollutant_cols,
+        key="multiselect_tab2",
     )
 
-    # keterangan bulan per musim
     musim_ke_bulan = {
-        "Winter": "Desember - Januari - Februari",
-        "Spring": "Maret - April - Mei",
-        "Summer": "Juni - Juli - Agustus",
-        "Autumn": "September - Oktober - November",
+        "Winter": "Desember – Januari – Februari",
+        "Spring": "Maret – April – Mei",
+        "Summer": "Juni – Juli – Agustus",
+        "Autumn": "September – Oktober – November",
     }
     st.info(f"📅 Musim **{musim}** mencakup bulan: **{musim_ke_bulan[musim]}**")
 
-    # hitung rata-rata per musim
     season_mean = (
-        fdf.groupby("season")[["PM2.5", "PM10", "SO2", "NO2", "CO", "O3"]]
+        fdf.groupby("season")[pollutant_cols]
         .mean()
         .reindex(season_order)
     )
@@ -221,74 +228,71 @@ with tab2:
         selected_row = selected_row[selected_row.index.isin(polutan_pilihan)]
 
         fig, ax = plt.subplots(figsize=(8, 4))
-        bars = selected_row.plot(
+        selected_row.plot(
             kind="bar",
             ax=ax,
-            color=["#9ecae1", "#6baed6", "#3182bd", "#08519c"][:len(selected_row)]
+            color=["#9ecae1", "#6baed6", "#3182bd", "#08519c", "#fd8d3c", "#6a51a3"][
+                : len(selected_row)
+            ],
         )
         ax.set_title(f"Konsentrasi Rata-rata Polutan pada Musim {musim}")
         ax.set_ylabel("Konsentrasi (µg/m³)")
         ax.set_xlabel("Jenis Polutan")
 
-        # buat agar teks tidak nabrak
         max_val = selected_row.max()
         ax.set_ylim(0, max_val * 1.2)
 
-        # tampilkan nilai di atas batang
         for i, v in enumerate(selected_row.values):
-            if v > 0:
-                ax.text(
-                    i,
-                    v + (max_val * 0.03),
-                    f"{v:.2f}",
-                    ha="center",
-                    va="bottom",
-                    fontsize=10,
-                    fontweight="bold"
-                )
+            ax.text(
+                i,
+                v + (max_val * 0.03),
+                f"{v:.2f}",
+                ha="center",
+                va="bottom",
+                fontsize=10,
+                fontweight="bold",
+            )
 
         st.pyplot(fig)
 
     st.markdown(
         """
         **Interpretasi cepat:**
-        - ❄️ *Winter* cenderung memiliki polutan tertinggi (efek pemanas & udara dingin).
-        - 🌞 *Summer* biasanya paling rendah karena sirkulasi udara lebih baik.
+        - ❄️ *Winter* biasanya paling tinggi.
+        - 🌞 *Summer* biasanya paling rendah.
+        - Kamu bisa hapus/tambah polutan dari multiselect di atas.
         """
     )
+
 # =========================================================
-# TAB 3 - KATEGORI PER STASIUN (BAIK / SEDANG / BURUK)
+# TAB 3
 # =========================================================
 with tab3:
     st.subheader("🏙️ Kategori Polutan per Stasiun")
 
     if "station" not in fdf.columns:
-        st.warning("Dataset tidak memiliki kolom `station`.")
+        st.warning("Dataset tidak punya kolom `station`.")
     else:
-        # ambil rata-rata per stasiun dari data yang sudah difilter
         by_station = (
-            fdf.groupby("station")[["PM2.5", "PM10", "SO2", "NO2", "CO", "O3"]]
+            fdf.groupby("station")[pollutant_cols]
             .mean()
             .reset_index()
         )
 
-        # pilih stasiun
         stasiun_pilihan = st.selectbox(
             "Pilih stasiun untuk dilihat detail kategorinya:",
-            options=by_station["station"].tolist()
+            options=by_station["station"].tolist(),
         )
 
-        # pilih polutan yang ingin ditampilkan
         polutan_tab3 = st.multiselect(
             "Pilih polutan yang ingin ditampilkan:",
-            options=["PM2.5", "PM10", "SO2", "NO2", "CO", "O3"],
-            default=["PM2.5", "PM10", "SO2", "NO2", "CO", "O3"],
-            key="multiselect_tab3"
+            options=pollutant_cols,
+            default=pollutant_cols,
+            key="multiselect_tab3",
         )
 
         row = by_station[by_station["station"] == stasiun_pilihan].iloc[0]
 
-        # fungsi kategori
         def cat_pm25(v):
             if v <= 35: return "Baik"
             elif v <= 75: return "Sedang"
@@ -308,12 +312,12 @@ with tab3:
             if v <= 40: return "Baik"
             elif v <= 80: return "Sedang"
             else: return "Buruk"
-            
+
         def cat_so2(v):
             if v <= 40: return "Baik"
             elif v <= 80: return "Sedang"
             else: return "Buruk"
-            
+
         def cat_o3(v):
             if v <= 100: return "Baik"
             elif v <= 150: return "Sedang"
@@ -322,13 +326,13 @@ with tab3:
         cat_dict = {}
         if "PM2.5" in row: cat_dict["PM2.5"] = (row["PM2.5"], cat_pm25(row["PM2.5"]))
         if "PM10" in row: cat_dict["PM10"] = (row["PM10"], cat_pm10(row["PM10"]))
-        if "CO" in row: cat_dict["CO"] = (row["CO"], cat_co(row["CO"]))
-        if "NO2" in row: cat_dict["NO2"] = (row["NO2"], cat_no2(row["NO2"]))
         if "SO2" in row: cat_dict["SO2"] = (row["SO2"], cat_so2(row["SO2"]))
+        if "NO2" in row: cat_dict["NO2"] = (row["NO2"], cat_no2(row["NO2"]))
+        if "CO" in row: cat_dict["CO"] = (row["CO"], cat_co(row["CO"]))
         if "O3" in row: cat_dict["O3"] = (row["O3"], cat_o3(row["O3"]))
 
-        # tampilkan metric hanya untuk polutan yang dipilih
-        cols = st.columns(len(polutan_tab3))
+        # kalau user hapus semua polutan → tetap bikin 1 kolom biar gak error
+        cols = st.columns(max(1, len(polutan_tab3)))
         idx = 0
         for pol, (val, cat) in cat_dict.items():
             if pol not in polutan_tab3:
@@ -340,13 +344,12 @@ with tab3:
         st.markdown("📋 **Keterangan kategori:**")
         st.markdown(
             """
-            -  **Baik** → masih di bawah ambang aman.  
-            -  **Sedang** → perlu pemantauan (aktivitas harian bisa berpengaruh).  
-            -  **Buruk** → butuh perhatian (biasanya musim dingin/lalu lintas padat).
+            - 🟢 **Baik** → masih di bawah ambang aman.  
+            - 🟡 **Sedang** → perlu pemantauan.  
+            - 🔴 **Buruk** → perlu perhatian.
             """
         )
 
-        # grafik horizontal bandingan antar stasiun
         fig, axes = plt.subplots(3, 2, figsize=(12, 9))
         fig.suptitle("Rata-rata Polutan per Stasiun")
 
